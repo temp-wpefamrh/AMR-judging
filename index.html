@@ -95,6 +95,16 @@ textarea{min-height:150px;resize:vertical}
 .score-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px}
 .score-head h2{margin:0;font-size:2.2rem;flex:1 1 auto}
 .score-head input{max-width:280px}
+.score-head .who{color:var(--muted);font-weight:600;margin-top:4px}
+.welcome{background:var(--surface);border:1px solid var(--rule);border-top:5px solid var(--accent,var(--ink));border-radius:12px;padding:20px 22px;margin:0 0 18px}
+.welcome h3{margin:0;font-size:2rem;line-height:1.1}
+.welcome .wtitle{color:var(--muted);margin:4px 0 12px;font-size:.95rem}
+.welcome ul{margin:0 0 14px;padding-left:1.2em}
+.welcome li{padding:2px 0}
+.jname{display:block;font-size:.78rem;color:var(--muted);font-weight:400;white-space:normal;line-height:1.2;margin-top:2px}
+.jrow{display:grid;grid-template-columns:1.2fr 1fr;gap:0 10px;border-top:1px solid var(--rule);padding:6px 0 10px}
+.jrow:first-of-type{border-top:0}
+.jrow .full{grid-column:1/-1}
 .status{color:var(--muted);font-size:.92rem;margin:0 0 6px}
 .progress{height:8px;background:var(--rule);border-radius:4px;overflow:hidden;margin:6px 0 18px}
 .progress i{display:block;height:100%;background:var(--accent,var(--ink));transition:width .3s}
@@ -214,6 +224,8 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     configLoaded: false,
     scores: {},          // "A-1" -> {scores:{teamId:{criterionIndex:1..5}}}; judges only hold their own
     codes: null, sheetUrl: "", exportMsg: "",
+    me: null,            // the logged-in judge's {name, title}
+    judges: null,        // organiser only: {A1:{name,title}, ...}
     view: "login", revealed: false, lbFilter: "all", find: "",
     session: null        // {role:"judge", panel, judge, code} | {role:"admin", code}
   };
@@ -278,6 +290,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     try {
       const d = await api({action:"allScores", code: state.session.code});
       state.scores = d.scores || {}; state.sheetUrl = d.sheetUrl || state.sheetUrl;
+      if (d.judges) state.judges = d.judges;
       setConfig(d.config);
       if (state.view === "board") renderBoard();
       notice("");
@@ -315,6 +328,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     rows.forEach((r,i) => { if (r.avg !== null && r.avg !== prev){ rank = i+1; prev = r.avg; } r.rank = r.avg === null ? null : rank; });
     return rows;
   }
+  const judgeName = (p,j) => state.judges?.[p+j]?.name || `Judge ${j}`;
   const memberText = t => t.members.map(m => m.role ? `${m.name} (${m.role})` : m.name).join(", ");
 
   /* ---------- Navigation ---------- */
@@ -342,6 +356,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
   async function logout(){
     await flushSave();
     state.session = null; state.scores = {}; state.codes = null; state.revealed = false; state.exportMsg = "";
+    state.me = null; state.judges = null;
     state.config.teams = {A:[],B:[]};
     saveSession();
     show("login");
@@ -397,9 +412,11 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     if (d.role === "judge"){
       state.session = {role:"judge", panel:d.panel, judge:d.judge, code};
       state.scores = {[d.panel+"-"+d.judge]: {scores: d.scores || {}}};
+      state.me = d.me || null;
     } else {
       state.session = {role:"admin", code};
       state.scores = d.scores || {}; state.codes = d.codes || null; state.sheetUrl = d.sheetUrl || "";
+      state.judges = d.judges || null;
     }
     saveSession();
     setConfig(d.config);
@@ -422,15 +439,15 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     el.style.setProperty("--accent-soft", `var(--${p.toLowerCase()}-soft)`);
     if (!teams.length){
       el.innerHTML = `
-        <div class="score-head"><h2>${PANEL_NAME[p]}, Judge ${s.judge}</h2></div>
+        ${scoreHead(false)}
+        ${welcomeCard(0)}
         <div class="empty"><h3>No teams yet</h3><p class="dim">The organiser hasn't added the team list yet. This page updates on its own once they do.</p></div>`;
+      wireWelcome();
       return;
     }
     el.innerHTML = `
-      <div class="score-head">
-        <h2>${PANEL_NAME[p]}, Judge ${s.judge}</h2>
-        <input id="find" type="search" placeholder="Find a team, school or student" aria-label="Find a team" value="${esc(state.find)}">
-      </div>
+      ${welcomeCard(teams.length)}
+      ${scoreHead(true)}
       <p class="status"><span id="progressText"></span> <span id="saveStatus">Scores save automatically. Tap a selected score again to clear it.</span></p>
       <div class="progress"><i id="progressBar" style="width:0"></i></div>
       <div class="teams">
@@ -459,9 +476,43 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
           </article>`).join("")}
       </div>`;
     el.querySelector(".teams").addEventListener("click", onPick);
+    wireWelcome();
     $("#find").addEventListener("input", e => { state.find = e.target.value; applyFind(); });
     applyFind();
     refreshScoring();
+  }
+  const welcomeKey = () => "judging-welcomed-" + (state.session?.panel || "") + (state.session?.judge || "");
+  function welcomeSeen(){ try { return sessionStorage.getItem(welcomeKey()) === "1"; } catch(e){ return false; } }
+  function scoreHead(withFind){
+    const s = state.session, name = state.me?.name;
+    return `<div class="score-head">
+        <div style="flex:1 1 auto">
+          <h2>${name ? esc(name) : `${PANEL_NAME[s.panel]}, Judge ${s.judge}`}</h2>
+          ${name ? `<div class="who">${PANEL_NAME[s.panel]}, Judge ${s.judge}</div>` : ""}
+        </div>
+        ${withFind ? `<input id="find" type="search" placeholder="Find a team, school or student" aria-label="Find a team" value="${esc(state.find)}">` : ""}
+      </div>`;
+  }
+  function welcomeCard(nTeams){
+    if (welcomeSeen()) return "";
+    const s = state.session, me = state.me || {};
+    return `<section class="welcome" id="welcome" aria-label="Welcome">
+        <h3>Welcome${me.name ? ", " + esc(me.name) : ""}</h3>
+        ${me.title ? `<p class="wtitle">${esc(me.title)}</p>` : `<p class="wtitle">${PANEL_NAME[s.panel]}, Judge ${s.judge}</p>`}
+        <p style="margin:0 0 8px">Thank you for judging ${esc(state.config.event || "today")}. You're on <b>${PANEL_NAME[s.panel]}</b>${nTeams ? ` with <b>${nTeams} team${nTeams === 1 ? "" : "s"}</b>` : ""}.</p>
+        <ul>
+          <li>Score each team from 1 (poor) to 5 (excellent) on all ${state.config.rubric.length} criteria. The full descriptions are in the <b>Rubric</b> tab.</li>
+          <li>Your scores save automatically and are recorded under your name. Tap a selected score again to clear it.</li>
+          <li>Only the organiser can see the results.</li>
+        </ul>
+        <button class="big" id="startScoring">Start scoring</button>
+      </section>`;
+  }
+  function wireWelcome(){
+    $("#startScoring")?.addEventListener("click", () => {
+      try { sessionStorage.setItem(welcomeKey(), "1"); } catch(e){}
+      $("#welcome")?.remove();
+    });
   }
   function applyFind(){
     const q = state.find.trim().toLowerCase();
@@ -561,7 +612,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
       const progress = ["A","B"].flatMap(p => JUDGES.map(j => {
         const teams = state.config.teams[p];
         const d = teams.filter(t => weightedScore(entryFor(p,j,t.id)) !== null).length;
-        return `<tr><td><span class="chip ${p}">${PANEL_NAME[p]}</span> Judge ${j}</td><td class="r">${d} / ${teams.length}${d===teams.length && teams.length ? " ✓" : ""}</td></tr>`;
+        return `<tr><td><span class="chip ${p}">${PANEL_NAME[p]}</span> Judge ${j}<span class="jname">${esc(judgeName(p,j))}</span></td><td class="r">${d} / ${teams.length}${d===teams.length && teams.length ? " ✓" : ""}</td></tr>`;
       })).join("");
       el.innerHTML = `
         ${exportBar()}
@@ -587,7 +638,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
         <td><b>${esc(r.t.name)}</b><div class="sub">${esc(r.t.school)}</div></td>
         <td>${esc(r.t.level)}</td>
         <td><span class="chip ${r.panel}">${PANEL_NAME[r.panel]}</span></td>
-        ${r.totals.map(t => `<td class="r ${t===null?"dim":""}">${fmt(t)}</td>`).join("")}
+        ${r.totals.map((t,ji) => `<td class="r ${t===null?"dim":""}">${fmt(t)}${state.lbFilter==="all" ? `<span class="jname">${esc(judgeName(r.panel, ji+1))}</span>` : ""}</td>`).join("")}
         <td class="r dim">${r.count}/3</td>
         <td class="r"><span class="avg">${fmt(r.avg)}</span><span class="bar" aria-hidden="true"><i style="width:${pct}%"></i></span></td>
       </tr>`;
@@ -611,7 +662,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
           <div class="score">${fmt(r.avg)}<span class="dim" style="font-size:1.1rem"> / ${mx}</span></div>
         </div>`).join("")}</div>` : `<p class="dim">No complete scores yet. A team appears in the ranking once a judge has scored all ${state.config.rubric.length} criteria for it.</p>`}
       <div class="scroll"><table class="data">
-        <thead><tr><th>Rank</th><th>Team</th><th>Level</th><th>Panel</th><th class="r">Judge 1</th><th class="r">Judge 2</th><th class="r">Judge 3</th><th class="r">Scored</th><th class="r">Average / ${mx}</th></tr></thead>
+        <thead><tr><th>Rank</th><th>Team</th><th>Level</th><th>Panel</th>${JUDGES.map(j => `<th class="r">${state.lbFilter==="all" ? `Judge ${j}` : esc(judgeName(state.lbFilter, j))}</th>`).join("")}<th class="r">Scored</th><th class="r">Average / ${mx}</th></tr></thead>
         <tbody>${body}</tbody>
       </table></div>
       <p class="dim" style="font-size:.9rem;margin-top:10px">Each judge's score is weighted: (score ÷ 5) × criterion weight, added up to a total out of ${mx}. The average uses the judges who have scored every criterion for that team. Ties share a rank. Updates every few seconds.</p>`;
@@ -639,15 +690,24 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
       const brk = [["Panel","Team","School","Judge",...rub.map(c => `${c.name} (${c.weight}%)`),"Weighted /100"]];
       for (const p of ["A","B"]) state.config.teams[p].forEach(t => JUDGES.forEach(j => {
         const e = entryFor(p,j,t.id) || {};
-        brk.push([PANEL_NAME[p], t.name, t.school, "Judge "+j, ...rub.map((_,ci) => e[ci] ?? ""), weightedScore(e) ?? ""]);
+        brk.push([PANEL_NAME[p], t.name, t.school, `Judge ${j}: ${judgeName(p,j)}`, ...rub.map((_,ci) => e[ci] ?? ""), weightedScore(e) ?? ""]);
       }));
       const wb = X.utils.book_new();
       const ws1 = X.utils.aoa_to_sheet(lead);
       ws1["!cols"] = [6,24,28,10,10,50,9,9,9,13,13].map(w => ({wch:w}));
       const ws2 = X.utils.aoa_to_sheet(brk);
-      ws2["!cols"] = [10,24,28,9,...rub.map(() => ({wch:16})), 14].map(w => typeof w === "number" ? {wch:w} : w);
+      ws2["!cols"] = [10,24,28,34,...rub.map(() => ({wch:16})), 14].map(w => typeof w === "number" ? {wch:w} : w);
       X.utils.book_append_sheet(wb, ws1, "Leaderboard");
       X.utils.book_append_sheet(wb, ws2, "Score breakdown");
+      const jrows = [["Panel","Judge","Name","Role","Teams fully scored"]];
+      for (const p of ["A","B"]) JUDGES.forEach(j => {
+        const teams = state.config.teams[p];
+        jrows.push([PANEL_NAME[p], "Judge " + j, judgeName(p,j), state.judges?.[p+j]?.title || "",
+          `${teams.filter(t => weightedScore(entryFor(p,j,t.id)) !== null).length} / ${teams.length}`]);
+      });
+      const ws3 = X.utils.aoa_to_sheet(jrows);
+      ws3["!cols"] = [10,9,40,80,18].map(w => ({wch:w}));
+      X.utils.book_append_sheet(wb, ws3, "Judges");
       const name = (state.config.event || "judging").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() || "judging";
       X.writeFile(wb, `${name}-results.xlsx`);
       setExportMsg("Excel file downloaded.");
@@ -665,9 +725,18 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
         <div class="box">
           <h3>Event</h3>
           <label for="evName">Event name</label><input id="evName" type="text" value="${esc(draft.event)}">
-          <h3 style="margin-top:18px">Passcodes</h3>
-          <p class="dim" style="margin:0;font-size:.9rem">One per judge, and each must be different. Give each judge only their own.</p>
-          <div class="codes">${CODE_KEYS.map(([k,label]) => `<div><label for="code-${k}">${label}</label><input id="code-${k}" type="text" autocomplete="off" autocapitalize="off" value="${esc(codes[k] || "")}"></div>`).join("")}</div>
+          <label for="code-admin">Organiser passcode</label><input id="code-admin" type="text" autocomplete="off" autocapitalize="off" value="${esc(codes.admin || "")}">
+        </div>
+        <div class="box">
+          <h3>Judges and passcodes</h3>
+          <p class="dim" style="margin:0 0 6px;font-size:.9rem">Each judge has their own passcode, and every score is recorded under their name. Give each judge only their own passcode.</p>
+          ${CODE_KEYS.filter(([k]) => k !== "admin").map(([k,label]) => `
+            <div class="jrow">
+              <label class="full" style="margin-top:8px"><span class="chip ${k[0]}">${label}</span></label>
+              <label>Name<input type="text" data-jn="${k}" value="${esc(state.judges?.[k]?.name || "")}"></label>
+              <label>Passcode<input id="code-${k}" type="text" autocomplete="off" autocapitalize="off" value="${esc(codes[k] || "")}"></label>
+              <label class="full">Role<input type="text" data-jt="${k}" value="${esc(state.judges?.[k]?.title || "")}"></label>
+            </div>`).join("")}
         </div>
         <div class="box" id="teamsBox"></div>
         <div class="box" style="grid-column:1/-1">
@@ -735,7 +804,9 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
   }
   async function saveConfig(){
     readCrits();
-    const config = {event: $("#evName").value.trim() || "Judging scoreboard", rubric: draft.rubric};
+    const judges = {};
+    CODE_KEYS.forEach(([k]) => { if (k === "admin") return; judges[k] = {name: $(`[data-jn="${k}"]`).value.trim(), title: $(`[data-jt="${k}"]`).value.trim()}; });
+    const config = {event: $("#evName").value.trim() || "Judging scoreboard", rubric: draft.rubric, judges};
     const codes = {}; CODE_KEYS.forEach(([k]) => codes[k] = $("#code-"+k).value.trim());
     const vals = Object.values(codes).filter(Boolean);
     if (new Set(vals).size !== vals.length){ $("#adminMsg").textContent = "Every passcode must be different."; return; }
@@ -743,6 +814,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     try {
       const d = await api({action:"saveConfig", code: state.session.code, config, codes});
       state.codes = d.codes; state.scores = d.scores || state.scores;
+      if (d.judges) state.judges = d.judges;
       if (d.codes?.admin){ state.session.code = d.codes.admin; saveSession(); }
       setConfig(d.config); renderAdmin();
       $("#adminMsg").textContent = "Settings saved.";
