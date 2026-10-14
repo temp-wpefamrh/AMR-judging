@@ -66,18 +66,19 @@ textarea{min-height:150px;resize:vertical}
 .note ol{margin:0;padding-left:1.4em}
 .note li{padding:2px 0}
 .note li span{color:var(--muted)}
-.rtable{width:100%;border-collapse:separate;border-spacing:0;background:var(--surface);border:1px solid var(--rule);border-radius:10px;overflow:hidden}
+.rtable{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;background:var(--surface);border:1px solid var(--rule);border-radius:10px;overflow:hidden}
 .rtable th,.rtable td{padding:12px 14px;vertical-align:top;border-bottom:1px solid var(--rule);text-align:left}
 .rtable tr:last-child td{border-bottom:0}
 .rtable thead th{background:var(--ink);color:var(--bg);font-family:"Barlow Condensed",Arial,sans-serif;font-size:1.1rem;font-weight:600}
 .rtable thead th small{display:block;font-family:Barlow,Arial,sans-serif;font-size:.8rem;font-weight:400;opacity:.8}
-.rtable .crit{width:34%;border-right:1px solid var(--rule)}
+.rtable .crit{width:31%;border-right:1px solid var(--rule)}
 .rtable .crit h3{margin:0 0 2px;font-size:1.35rem}
 .rtable .crit .w{display:inline-block;font-weight:600;font-size:.85rem;background:var(--a-soft);color:var(--a);padding:1px 8px;border-radius:99px;margin-bottom:8px}
-.rtable .crit p{margin:0;color:var(--muted);font-size:.95rem}
-.rtable td.lvl{font-size:.92rem;width:13.2%}
+.rtable .crit p{margin:0;color:var(--muted);font-size:.95rem;white-space:pre-line}
+.rtable td.lvl{font-size:.9rem;white-space:pre-line;overflow-wrap:anywhere}
 .rtable td.lvl:nth-child(even){background:var(--tint)}
 @media (max-width:820px){
+  .rtable{table-layout:auto}
   .rtable,.rtable tbody,.rtable tr,.rtable td{display:block;width:auto!important}
   .rtable thead{display:none}
   .rtable tr{border-bottom:6px solid var(--bg)}
@@ -117,7 +118,7 @@ textarea{min-height:150px;resize:vertical}
 .crow .pick{display:flex;gap:6px}
 .lvl-btn{width:44px;height:40px;border:1px solid var(--rule);background:var(--bg);border-radius:8px;font-size:1.25rem;font-weight:700;cursor:pointer}
 .lvl-btn[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
-.crow .hint{grid-column:1/-1;font-size:.85rem;color:var(--muted);min-height:1.2em}
+.crow .hint{grid-column:1/-1;font-size:.85rem;color:var(--muted);min-height:1.2em;white-space:pre-line}
 @media (max-width:560px){ .crow{grid-template-columns:1fr} .lvl-btn{flex:1;width:auto} .crow .pick{width:100%} .score-head input{max-width:none} }
 
 /* Scoreboard */
