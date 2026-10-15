@@ -137,6 +137,9 @@ table.data .ps{font-size:.84rem;white-space:normal;margin-top:2px;max-width:360p
 /* Scoreboard */
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:10px 12px;margin-bottom:16px}
 .toolbar b{margin-right:4px}
+.roundbar{display:flex;gap:10px 14px;flex-wrap:wrap;align-items:center;background:var(--surface);border:1px solid var(--rule);border-left:5px solid var(--gold);border-radius:10px;padding:12px 14px;margin-bottom:16px}
+.roundbar .msg{flex:1 1 260px}
+.rchip{display:inline-block;font-size:.78rem;font-weight:700;padding:2px 9px;border-radius:99px;background:var(--gold);color:#fff;vertical-align:middle}
 .veil{background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:28px;text-align:center}
 .veil h3{margin:0 0 6px;font-size:1.8rem}
 .veil p{margin:0 auto 16px;max-width:52ch}
@@ -164,6 +167,8 @@ tr.top1 .rank{color:var(--gold)}
 .pod .name{font-size:1.25rem;font-weight:600;margin:2px 0 0}
 .pod .school{color:var(--muted);font-size:.9rem;margin-bottom:6px}
 .pod .score{font-family:"Barlow Condensed",Arial,sans-serif;font-size:2.6rem;font-weight:700;line-height:1}
+table.data.r2 th{white-space:normal;vertical-align:bottom;max-width:118px;line-height:1.25}
+table.data.r2 td:nth-child(2){min-width:170px;white-space:normal}
 .progress-list{max-width:560px;margin:14px auto 0;text-align:left}
 
 /* Settings */
@@ -215,9 +220,10 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
      ============================================================ */
   const API_URL = "https://script.google.com/macros/s/AKfycbygyO6xRw-JZNazjdt3qXtAf4qWsBjI7f6nfOOrWWuEh8KczZL8d4bEVlEBwWEbY10/exec";
 
-  const ADMIN_POLL_MS = 5000, CONFIG_POLL_MS = 30000;
+  const ADMIN_POLL_MS = 5000, CONFIG_POLL_MS = 15000;
   const XLSX_URL = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
   const JUDGES = [1,2,3];
+  const ALL_JUDGES = ["A1","A2","A3","B1","B2","B3"];
   const PANEL_NAME = {A:"Panel A", B:"Panel B"};
   const LEVEL_NAMES = ["Poor","Fair","Good","Very good","Excellent"];
   const CODE_KEYS = [["A1","Panel A, Judge 1"],["A2","Panel A, Judge 2"],["A3","Panel A, Judge 3"],["B1","Panel B, Judge 1"],["B2","Panel B, Judge 2"],["B3","Panel B, Judge 3"],["admin","Organiser"]];
@@ -229,6 +235,9 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     codes: null, sheetUrl: "", exportMsg: "",
     me: null,            // the logged-in judge's {name, title}
     judges: null,        // organiser only: {A1:{name,title}, ...}
+    round: 1,            // judges: which round they're scoring
+    round2: null,        // organiser: {active, teams, startedAt, scores}
+    boardRound: 1, revealed2: false,
     view: "login", revealed: false, lbFilter: "all", find: "",
     session: null        // {role:"judge", panel, judge, code} | {role:"admin", code}
   };
@@ -279,12 +288,31 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
   async function pollConfig(){
     if (document.hidden || isAdmin()) return;
     try {
-      if (isJudge()) setConfig((await api({action:"me", code: state.session.code})).config);
+      if (isJudge()){
+        const d = await api({action:"me", code: state.session.code});
+        if ((d.config?.round || 1) !== state.round) await switchRound();
+        else setConfig(d.config);
+      }
       else setConfig((await api()).config);
       notice("");
     } catch(e){
       notice(isJudge() && /passcode/i.test(e.message) ? "Your passcode has been changed by the organiser. Log out and log in with the new one." : e.message);
     }
+  }
+  let switching = false;
+  async function switchRound(){
+    if (switching || !isJudge()) return;
+    switching = true;
+    clearTimeout(saveTimer); saveTimer = null; dirtyTeams.clear();
+    try { const code = state.session.code; startSession(await api({action:"login", code}), code); }
+    catch(e){ notice(e.message); }
+    switching = false;
+  }
+  function applyAdmin(d){
+    state.scores = d.scores || {}; state.sheetUrl = d.sheetUrl || state.sheetUrl;
+    if (d.judges) state.judges = d.judges;
+    state.round2 = d.round2 || null;
+    if (!state.round2) state.boardRound = 1;
   }
   let adminPolling = false;
   async function pollAdmin(){
@@ -292,8 +320,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     adminPolling = true;
     try {
       const d = await api({action:"allScores", code: state.session.code});
-      state.scores = d.scores || {}; state.sheetUrl = d.sheetUrl || state.sheetUrl;
-      if (d.judges) state.judges = d.judges;
+      applyAdmin(d);
       setConfig(d.config);
       if (state.view === "board") renderBoard();
       notice("");
@@ -359,7 +386,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
   async function logout(){
     await flushSave();
     state.session = null; state.scores = {}; state.codes = null; state.revealed = false; state.exportMsg = "";
-    state.me = null; state.judges = null;
+    state.me = null; state.judges = null; state.round = 1; state.round2 = null; state.boardRound = 1; state.revealed2 = false;
     state.config.teams = {A:[],B:[]};
     saveSession();
     show("login");
@@ -416,10 +443,12 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
       state.session = {role:"judge", panel:d.panel, judge:d.judge, code};
       state.scores = {[d.panel+"-"+d.judge]: {scores: d.scores || {}}};
       state.me = d.me || null;
+      state.round = d.config?.round || 1;
     } else {
       state.session = {role:"admin", code};
       state.scores = d.scores || {}; state.codes = d.codes || null; state.sheetUrl = d.sheetUrl || "";
       state.judges = d.judges || null;
+      state.round2 = d.round2 || null;
     }
     saveSession();
     setConfig(d.config);
@@ -485,14 +514,14 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     applyFind();
     refreshScoring();
   }
-  const welcomeKey = () => "judging-welcomed-" + (state.session?.panel || "") + (state.session?.judge || "");
+  const welcomeKey = () => "judging-welcomed-" + (state.session?.panel || "") + (state.session?.judge || "") + "-r" + state.round;
   function welcomeSeen(){ try { return sessionStorage.getItem(welcomeKey()) === "1"; } catch(e){ return false; } }
   function scoreHead(withFind){
     const s = state.session, name = state.me?.name;
     return `<div class="score-head">
         <div style="flex:1 1 auto">
           <h2>${name ? esc(name) : `${PANEL_NAME[s.panel]}, Judge ${s.judge}`}</h2>
-          ${name ? `<div class="who">${PANEL_NAME[s.panel]}, Judge ${s.judge}</div>` : ""}
+          <div class="who">${state.round === 2 ? `<span class="rchip">Round 2 finals</span> ` : ""}${name ? `${PANEL_NAME[s.panel]}, Judge ${s.judge}` : ""}</div>
         </div>
         ${withFind ? `<input id="find" type="search" placeholder="Search teams, schools, students or PS" aria-label="Find a team" value="${esc(state.find)}">` : ""}
       </div>`;
@@ -501,9 +530,11 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     if (welcomeSeen()) return "";
     const s = state.session, me = state.me || {};
     return `<section class="welcome" id="welcome" aria-label="Welcome">
-        <h3>Welcome${me.name ? ", " + esc(me.name) : ""}</h3>
+        <h3>${state.round === 2 ? "Welcome to round 2" : "Welcome"}${me.name ? ", " + esc(me.name) : ""}</h3>
         ${me.title ? `<p class="wtitle">${esc(me.title)}</p>` : `<p class="wtitle">${PANEL_NAME[s.panel]}, Judge ${s.judge}</p>`}
-        <p style="margin:0 0 8px">Thank you for judging ${esc(state.config.event || "today")}. You're on <b>${PANEL_NAME[s.panel]}</b>${nTeams ? ` with <b>${nTeams} team${nTeams === 1 ? "" : "s"}</b>` : ""}.</p>
+        ${state.round === 2
+          ? `<p style="margin:0 0 8px"><span class="rchip">Round 2 finals</span> Round 2 has begun. The top ${nTeams || 3} teams from round 1 go through, and <b>all six judges from both panels</b> now score each of them.</p>`
+          : `<p style="margin:0 0 8px">Thank you for judging ${esc(state.config.event || "today")}. You're on <b>${PANEL_NAME[s.panel]}</b>${nTeams ? ` with <b>${nTeams} team${nTeams === 1 ? "" : "s"}</b>` : ""}.</p>`}
         <ul>
           <li>Score each team from 1 (poor) to 5 (excellent) on all ${state.config.rubric.length} criteria. The full descriptions are in the <b>Rubric</b> tab.</li>
           <li>Your scores save automatically and are recorded under your name. Tap a selected score again to clear it.</li>
@@ -541,8 +572,14 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     while (dirtyTeams.size){
       const ids = [...dirtyTeams]; dirtyTeams.clear();
       const changes = {}; ids.forEach(id => changes[id] = mine[id] || {});
-      try { await api({action:"saveScores", code: state.session.code, changes}); setStatus("Saved."); }
+      try { await api({action:"saveScores", code: state.session.code, round: state.round, changes}); setStatus("Saved."); }
       catch(err){
+        if (/round changed/i.test(err.message)){
+          writing = false; dirtyTeams.clear();
+          setStatus("The organiser has changed rounds. Loading the new team list…");
+          switchRound();
+          return;
+        }
         ids.forEach(id => dirtyTeams.add(id));
         const pc = /passcode/i.test(err.message);
         setStatus(pc ? "Not saved: your passcode has changed. Log out and log in with the new one." : "Couldn't save. Retrying in a few seconds…");
@@ -592,7 +629,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
   }
   function wireExports(){
     $("#toSheet").addEventListener("click", async () => {
-      const b = $("#toSheet"); b.disabled = true; setExportMsg("Writing the Leaderboard and Score breakdown tabs…");
+      const b = $("#toSheet"); b.disabled = true; setExportMsg(state.round2 ? "Writing the round 1 and round 2 tabs…" : "Writing the Leaderboard and Score breakdown tabs…");
       try {
         const d = await api({action:"exportSheet", code: state.session.code});
         state.sheetUrl = d.url || state.sheetUrl;
@@ -604,8 +641,132 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
   }
   function setExportMsg(t){ state.exportMsg = t; const m = $("#exportMsg"); if (m) m.textContent = t; }
 
+  function roundBar(){
+    const r2 = state.round2;
+    let msg, btns;
+    if (!r2){
+      msg = `<b>Round 2</b> takes the current top 3 teams from the leaderboard, and all six judges score them.`;
+      btns = `<button class="big" id="startR2">Start round 2</button>`;
+    } else if (r2.active){
+      msg = `<span class="rchip">Round 2 is live</span> All six judges are scoring the ${r2.teams.length} finalists. Round 1 scores are locked.`;
+      btns = `<button class="ghost" id="pauseR2">Send judges back to round 1</button>`;
+    } else {
+      msg = `<b>Round 2 is paused.</b> Judges are back on round 1. Round 2 scores so far are kept.`;
+      btns = `<button class="ghost" id="resumeR2">Resume round 2</button><button class="ghost danger" id="restartR2">Restart round 2 with current top 3</button>`;
+    }
+    return `<div class="roundbar">
+        ${r2 ? `<div class="seg" role="group" aria-label="Round">
+          <button data-round="1" aria-pressed="${state.boardRound===1}">Round 1</button>
+          <button data-round="2" aria-pressed="${state.boardRound===2}">Round 2 finals</button></div>` : ""}
+        <span class="msg">${msg}</span>${btns}
+      </div>`;
+  }
+  async function roundAction(body, okMsg){
+    setExportMsg("Working…");
+    try {
+      const d = await api({code: state.session.code, ...body});
+      applyAdmin(d); setConfig(d.config);
+      setExportMsg(okMsg);
+    } catch(e){ setExportMsg(e.message); }
+    renderBoard();
+  }
+  function confirmStart(restart){
+    const all = teamRows("all"), scored = all.filter(r => r.avg !== null);
+    if (scored.length < 3){ alert("At least 3 teams need complete round 1 scores before round 2 can start."); return false; }
+    const top = scored.slice(0, 3), fourth = scored[3];
+    const notDone = ["A","B"].flatMap(p => JUDGES.filter(j => state.config.teams[p].some(t => weightedScore(entryFor(p,j,t.id)) === null)).map(j => judgeName(p,j)));
+    let msg = (restart ? "Restart round 2? Round 2 scores so far will be cleared.\n\n" : "Start round 2?\n\n") +
+      "These teams go through, and all six judges will score them:\n" +
+      top.map(r => `${r.rank}. ${r.t.name} (${PANEL_NAME[r.panel]}, ${fmt(r.avg)})`).join("\n");
+    if (fourth && fourth.avg === top[2].avg) msg += `\n\nNote: ${fourth.t.name} is tied with ${top[2].t.name} for 3rd place but won't go through.`;
+    if (notDone.length) msg += `\n\nNot all round 1 scoring is finished. Still scoring: ${notDone.join(", ")}.`;
+    msg += "\n\nRound 1 scores will be locked while round 2 runs.";
+    return confirm(msg);
+  }
+  function wireRounds(){
+    document.querySelectorAll(".roundbar [data-round]").forEach(b => b.addEventListener("click", () => { state.boardRound = Number(b.dataset.round); renderBoard(); }));
+    $("#startR2")?.addEventListener("click", async () => {
+      if (!confirmStart(false)) return;
+      state.boardRound = 2; state.revealed2 = false;
+      await roundAction({action:"startRound2"}, "Round 2 started. Judges' screens switch to the finalists within a few seconds.");
+    });
+    $("#restartR2")?.addEventListener("click", async () => {
+      if (!confirmStart(true)) return;
+      state.boardRound = 2; state.revealed2 = false;
+      await roundAction({action:"startRound2"}, "Round 2 restarted with the current top 3.");
+    });
+    $("#pauseR2")?.addEventListener("click", async () => {
+      if (!confirm("Send judges back to round 1? Round 2 scores so far are kept, and you can resume round 2 later.")) return;
+      await roundAction({action:"setRound2Active", active:false}, "Judges are back on round 1.");
+    });
+    $("#resumeR2")?.addEventListener("click", () => roundAction({action:"setRound2Active", active:true}, "Round 2 resumed."));
+  }
+  function round2Rows(){
+    const R = state.round2;
+    const rows = R.teams.map(t => {
+      const totals = ALL_JUDGES.map(k => weightedScore(R.scores?.[k[0]+"-"+k[1]]?.scores?.[t.id]));
+      const got = totals.filter(x => x !== null);
+      return {t, totals, count: got.length, avg: got.length ? r2(got.reduce((a,b)=>a+b,0)/got.length) : null};
+    });
+    rows.sort((x,y) => (y.avg ?? -1) - (x.avg ?? -1) || y.count - x.count || (x.t.r1Rank||99) - (y.t.r1Rank||99));
+    let rank = 0, prev = null;
+    rows.forEach((r,i) => { if (r.avg !== null && r.avg !== prev){ rank = i+1; prev = r.avg; } r.rank = r.avg === null ? null : rank; });
+    return rows;
+  }
+  function renderBoard2(el){
+    const r2 = state.round2, mx = maxScore(), n = r2.teams.length;
+    if (!state.revealed2){
+      const progress = ALL_JUDGES.map(k => {
+        const d = r2.teams.filter(t => weightedScore(r2.scores?.[k[0]+"-"+k[1]]?.scores?.[t.id]) !== null).length;
+        return `<tr><td><span class="chip ${k[0]}">${PANEL_NAME[k[0]]}</span> Judge ${k[1]}<span class="jname">${esc(judgeName(k[0], k[1]))}</span></td><td class="r">${d} / ${n}${d===n ? " ✓" : ""}</td></tr>`;
+      }).join("");
+      el.innerHTML = `${exportBar()}${roundBar()}
+        <div class="veil">
+          <h3>Round 2 scoreboard hidden</h3>
+          <p class="dim">Finalists: ${r2.teams.map(t => esc(t.name)).join(", ")}. Results stay hidden until you reveal them.</p>
+          <button class="big" id="reveal2">Reveal round 2 results</button>
+          <h3 style="font-size:1.3rem;margin-top:26px">Round 2 judging progress</h3>
+          <div class="scroll progress-list"><table class="data" style="min-width:0">
+            <thead><tr><th>Judge</th><th class="r">Finalists scored</th></tr></thead>
+            <tbody>${progress}</tbody>
+          </table></div>
+        </div>`;
+      $("#reveal2").addEventListener("click", () => { state.revealed2 = true; renderBoard(); });
+      wireExports(); wireRounds();
+      return;
+    }
+    const rows = round2Rows(), scored = rows.filter(r => r.avg !== null);
+    el.innerHTML = `${exportBar()}${roundBar()}
+      <div class="head">
+        <h2>Round 2 finals</h2>
+        <button class="ghost" id="hide2">Hide scoreboard</button>
+      </div>
+      ${scored.length ? `<div class="podium">${scored.map(r => `
+        <div class="pod ${r.rank===1?"p1":""}">
+          <div class="place">${["First","Second","Third"][r.rank-1] || "Place " + r.rank}</div>
+          <div class="name">${esc(r.t.name)}</div>
+          <div class="school">${esc(r.t.school)}${r.t.ps ? `<br>PS: ${esc(r.t.ps)}` : ""}</div>
+          <div class="score">${fmt(r.avg)}<span class="dim" style="font-size:1.1rem"> / ${mx}</span></div>
+        </div>`).join("")}</div>` : `<p class="dim">No complete round 2 scores yet.</p>`}
+      <div class="scroll"><table class="data r2">
+        <thead><tr><th>Rank</th><th>Team</th><th>Round 1</th>${ALL_JUDGES.map(k => `<th class="r">${esc(judgeName(k[0], k[1]))}<span class="jname">${PANEL_NAME[k[0]]}</span></th>`).join("")}<th class="r">Scored</th><th class="r">Average / ${mx}</th></tr></thead>
+        <tbody>${rows.map(r => `<tr class="${r.rank===1 ? "top1":""}">
+          <td class="rank">${r.rank ?? "–"}</td>
+          <td><b>${esc(r.t.name)}</b><div class="sub">${esc(r.t.school)}</div>${r.t.ps ? `<div class="sub ps">PS: ${esc(r.t.ps)}</div>` : ""}</td>
+          <td><span class="chip ${r.t.panel}">${PANEL_NAME[r.t.panel]}</span><span class="jname">#${r.t.r1Rank}, ${fmt(r.t.r1Avg)}</span></td>
+          ${r.totals.map(t => `<td class="r ${t===null?"dim":""}">${fmt(t)}</td>`).join("")}
+          <td class="r dim">${r.count}/6</td>
+          <td class="r"><span class="avg">${fmt(r.avg)}</span></td>
+        </tr>`).join("")}</tbody>
+      </table></div>
+      <p class="dim" style="font-size:.9rem;margin-top:10px">Round 2 is scored fresh by all six judges with the same rubric; round 1 scores don't carry over. The average uses the judges who have scored every criterion for that team.</p>`;
+    $("#hide2").addEventListener("click", () => { state.revealed2 = false; renderBoard(); });
+    wireExports(); wireRounds();
+  }
+
   function renderBoard(){
     const el = $("#view-board");
+    if (state.boardRound === 2 && state.round2){ renderBoard2(el); return; }
     const total = state.config.teams.A.length + state.config.teams.B.length;
     if (!total){
       el.innerHTML = `<div class="empty"><h3>No teams yet</h3><p class="dim">Paste your team list into the Teams tab of the Google Sheet (Name, School, Level, Role, Team, No of pax). It appears here within a few seconds.</p>
@@ -619,7 +780,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
         return `<tr><td><span class="chip ${p}">${PANEL_NAME[p]}</span> Judge ${j}<span class="jname">${esc(judgeName(p,j))}</span></td><td class="r">${d} / ${teams.length}${d===teams.length && teams.length ? " ✓" : ""}</td></tr>`;
       })).join("");
       el.innerHTML = `
-        ${exportBar()}
+        ${exportBar()}${roundBar()}
         <div class="veil">
           <h3>Scoreboard hidden</h3>
           <p class="dim">Only the organiser can open this page. Results stay hidden until you reveal them, so it's safe to leave this screen open or projected.</p>
@@ -631,7 +792,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
           </table></div>
         </div>`;
       $("#reveal").addEventListener("click", () => { state.revealed = true; renderBoard(); });
-      wireExports();
+      wireExports(); wireRounds();
       return;
     }
     const rows = teamRows(state.lbFilter), mx = maxScore(), scored = rows.filter(r => r.avg !== null);
@@ -648,7 +809,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
       </tr>`;
     }).join("");
     el.innerHTML = `
-      ${exportBar()}
+      ${exportBar()}${roundBar()}
       <div class="head">
         <h2>Scoreboard</h2>
         <div class="row" style="margin:0">
@@ -672,7 +833,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
       <p class="dim" style="font-size:.9rem;margin-top:10px">Each judge's score is weighted: (score ÷ 5) × criterion weight, added up to a total out of ${mx}. The average uses the judges who have scored every criterion for that team. Ties share a rank. Updates every few seconds.</p>`;
     el.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => { state.lbFilter = b.dataset.f; renderBoard(); }));
     $("#hide").addEventListener("click", () => { state.revealed = false; renderBoard(); });
-    wireExports();
+    wireExports(); wireRounds();
   }
 
   function loadXLSX(){
@@ -712,6 +873,20 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
       const ws3 = X.utils.aoa_to_sheet(jrows);
       ws3["!cols"] = [10,9,40,80,18].map(w => ({wch:w}));
       X.utils.book_append_sheet(wb, ws3, "Judges");
+      if (state.round2){
+        const r2 = state.round2, jhead = ALL_JUDGES.map(k => `${PANEL_NAME[k[0]]} Judge ${k[1]}: ${judgeName(k[0], k[1])}`);
+        const l2 = [["Rank","Team","School","Level","Problem statement","Round 1 panel","Round 1 average",...jhead,"Judges scored","Round 2 average /100"]];
+        round2Rows().forEach(r => l2.push([r.rank ?? "", r.t.name, r.t.school, r.t.level, r.t.ps || "", PANEL_NAME[r.t.panel], r.t.r1Avg, ...r.totals.map(t => t ?? ""), `${r.count}/6`, r.avg ?? ""]));
+        const b2 = [["Team","School","Problem statement","Judge",...rub.map(c => `${c.name} (${c.weight}%)`),"Weighted /100"]];
+        r2.teams.forEach(t => ALL_JUDGES.forEach((k, i) => {
+          const e = r2.scores?.[k[0]+"-"+k[1]]?.scores?.[t.id] || {};
+          b2.push([t.name, t.school, t.ps || "", jhead[i], ...rub.map((_,ci) => e[ci] ?? ""), weightedScore(e) ?? ""]);
+        }));
+        const ws4 = X.utils.aoa_to_sheet(l2); ws4["!cols"] = [6,24,28,10,45,12,12,...jhead.map(() => 18),13,16].map(w => ({wch:w}));
+        const ws5 = X.utils.aoa_to_sheet(b2); ws5["!cols"] = [24,28,45,40,...rub.map(() => 16),14].map(w => ({wch:w}));
+        X.utils.book_append_sheet(wb, ws4, "Round 2 leaderboard");
+        X.utils.book_append_sheet(wb, ws5, "Round 2 breakdown");
+      }
       const name = (state.config.event || "judging").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() || "judging";
       X.writeFile(wb, `${name}-results.xlsx`);
       setExportMsg("Excel file downloaded.");
@@ -826,9 +1001,9 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     } catch(e){ $("#adminMsg").textContent = /passcode/i.test(e.message) && !/different/i.test(e.message) ? "Not saved: organiser passcode rejected. Log in again." : e.message; }
   }
   async function resetScores(){
-    if (!confirm("Clear every score from both panels? This can't be undone.")) return;
+    if (!confirm("Clear every score from both panels and both rounds, and remove round 2? This can't be undone.")) return;
     $("#adminMsg").textContent = "Clearing…";
-    try { await api({action:"reset", code: state.session.code}); state.scores = {}; $("#adminMsg").textContent = "All scores cleared."; }
+    try { const d = await api({action:"reset", code: state.session.code}); applyAdmin(d); state.revealed = state.revealed2 = false; $("#adminMsg").textContent = "All scores cleared, and round 2 removed."; }
     catch(e){ $("#adminMsg").textContent = "Couldn't clear scores: " + e.message; }
   }
 
