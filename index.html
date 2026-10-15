@@ -115,6 +115,9 @@ textarea{min-height:150px;resize:vertical}
 .tname{font-size:1.65rem;font-weight:700;line-height:1.1}
 .tchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .tchip{font-size:.82rem;padding:2px 10px;border-radius:99px;background:var(--tint);color:var(--muted);font-weight:600}
+.tps{margin:10px 0 0;padding:8px 12px;background:var(--tint);border-radius:8px;font-size:.92rem;line-height:1.4}
+.tps b{font-family:"Barlow Condensed",Arial,sans-serif;font-size:1rem;margin-right:4px}
+table.data .ps{font-size:.84rem;white-space:normal;margin-top:2px;max-width:360px}
 .tchip.school{background:var(--accent-soft,var(--tint));color:var(--accent,var(--muted))}
 .tscore{text-align:right;white-space:nowrap}
 .tscore .num{font-size:1.9rem;font-weight:700}
@@ -452,7 +455,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
       <div class="progress"><i id="progressBar" style="width:0"></i></div>
       <div class="teams">
         ${teams.map((t, ti) => `
-          <article class="team" data-ti="${ti}" data-search="${esc([t.name, t.school, t.level, ...t.members.map(m => m.name)].join(" ").toLowerCase())}">
+          <article class="team" data-ti="${ti}" data-search="${esc([t.name, t.school, t.level, t.ps || "", ...t.members.map(m => m.name)].join(" ").toLowerCase())}">
             <div class="team-top">
               <div>
                 <div class="tname">${esc(t.name)}</div>
@@ -464,6 +467,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
               </div>
               <div class="tscore"><span class="num" data-total="${ti}">–</span><span class="dim"> / ${maxScore()}</span></div>
             </div>
+            ${t.ps ? `<p class="tps"><b>Problem statement</b>${esc(t.ps)}</p>` : ""}
             ${t.members.length ? `<ul class="members">${t.members.map(m => `<li><span class="mname">${esc(m.name)}</span>${m.role ? `<span class="mrole">${esc(m.role)}</span>` : ""}</li>`).join("")}</ul>` : ""}
             ${rub.map((c, ci) => `
               <div class="crow">
@@ -490,7 +494,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
           <h2>${name ? esc(name) : `${PANEL_NAME[s.panel]}, Judge ${s.judge}`}</h2>
           ${name ? `<div class="who">${PANEL_NAME[s.panel]}, Judge ${s.judge}</div>` : ""}
         </div>
-        ${withFind ? `<input id="find" type="search" placeholder="Find a team, school or student" aria-label="Find a team" value="${esc(state.find)}">` : ""}
+        ${withFind ? `<input id="find" type="search" placeholder="Search teams, schools, students or PS" aria-label="Find a team" value="${esc(state.find)}">` : ""}
       </div>`;
   }
   function welcomeCard(nTeams){
@@ -635,7 +639,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
       const pct = r.avg !== null && mx ? Math.round(r.avg/mx*100) : 0;
       return `<tr class="${r.rank===1 ? "top1":""}">
         <td class="rank">${r.rank ?? "–"}</td>
-        <td><b>${esc(r.t.name)}</b><div class="sub">${esc(r.t.school)}</div></td>
+        <td><b>${esc(r.t.name)}</b><div class="sub">${esc(r.t.school)}</div>${r.t.ps ? `<div class="sub ps">PS: ${esc(r.t.ps)}</div>` : ""}</td>
         <td>${esc(r.t.level)}</td>
         <td><span class="chip ${r.panel}">${PANEL_NAME[r.panel]}</span></td>
         ${r.totals.map((t,ji) => `<td class="r ${t===null?"dim":""}">${fmt(t)}${state.lbFilter==="all" ? `<span class="jname">${esc(judgeName(r.panel, ji+1))}</span>` : ""}</td>`).join("")}
@@ -658,7 +662,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
         <div class="pod ${r.rank===1?"p1":""}">
           <div class="place">${["First","Second","Third"][r.rank-1] || "Place " + r.rank}</div>
           <div class="name">${esc(r.t.name)} <span class="chip ${r.panel}">${PANEL_NAME[r.panel]}</span></div>
-          <div class="school">${esc(r.t.school)}${r.t.level ? ", " + esc(r.t.level) : ""}</div>
+          <div class="school">${esc(r.t.school)}${r.t.level ? ", " + esc(r.t.level) : ""}${r.t.ps ? `<br>PS: ${esc(r.t.ps)}` : ""}</div>
           <div class="score">${fmt(r.avg)}<span class="dim" style="font-size:1.1rem"> / ${mx}</span></div>
         </div>`).join("")}</div>` : `<p class="dim">No complete scores yet. A team appears in the ranking once a judge has scored all ${state.config.rubric.length} criteria for it.</p>`}
       <div class="scroll"><table class="data">
@@ -685,18 +689,18 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     setExportMsg("Preparing Excel file…");
     try {
       const X = await loadXLSX(), rub = state.config.rubric;
-      const lead = [["Rank","Team","School","Level","Panel","Members","Judge 1","Judge 2","Judge 3","Judges scored","Average /100"]];
-      teamRows("all").forEach(r => lead.push([r.rank ?? "", r.t.name, r.t.school, r.t.level, PANEL_NAME[r.panel], memberText(r.t), ...r.totals.map(t => t ?? ""), `${r.count}/3`, r.avg ?? ""]));
-      const brk = [["Panel","Team","School","Judge",...rub.map(c => `${c.name} (${c.weight}%)`),"Weighted /100"]];
+      const lead = [["Rank","Team","School","Level","Problem statement","Panel","Members","Judge 1","Judge 2","Judge 3","Judges scored","Average /100"]];
+      teamRows("all").forEach(r => lead.push([r.rank ?? "", r.t.name, r.t.school, r.t.level, r.t.ps || "", PANEL_NAME[r.panel], memberText(r.t), ...r.totals.map(t => t ?? ""), `${r.count}/3`, r.avg ?? ""]));
+      const brk = [["Panel","Team","School","Problem statement","Judge",...rub.map(c => `${c.name} (${c.weight}%)`),"Weighted /100"]];
       for (const p of ["A","B"]) state.config.teams[p].forEach(t => JUDGES.forEach(j => {
         const e = entryFor(p,j,t.id) || {};
-        brk.push([PANEL_NAME[p], t.name, t.school, `Judge ${j}: ${judgeName(p,j)}`, ...rub.map((_,ci) => e[ci] ?? ""), weightedScore(e) ?? ""]);
+        brk.push([PANEL_NAME[p], t.name, t.school, t.ps || "", `Judge ${j}: ${judgeName(p,j)}`, ...rub.map((_,ci) => e[ci] ?? ""), weightedScore(e) ?? ""]);
       }));
       const wb = X.utils.book_new();
       const ws1 = X.utils.aoa_to_sheet(lead);
-      ws1["!cols"] = [6,24,28,10,10,50,9,9,9,13,13].map(w => ({wch:w}));
+      ws1["!cols"] = [6,24,28,10,45,10,50,9,9,9,13,13].map(w => ({wch:w}));
       const ws2 = X.utils.aoa_to_sheet(brk);
-      ws2["!cols"] = [10,24,28,34,...rub.map(() => ({wch:16})), 14].map(w => typeof w === "number" ? {wch:w} : w);
+      ws2["!cols"] = [10,24,28,45,34,...rub.map(() => ({wch:16})), 14].map(w => typeof w === "number" ? {wch:w} : w);
       X.utils.book_append_sheet(wb, ws1, "Leaderboard");
       X.utils.book_append_sheet(wb, ws2, "Score breakdown");
       const jrows = [["Panel","Judge","Name","Role","Teams fully scored"]];
@@ -761,10 +765,11 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
     const box = $("#teamsBox"); if (!box) return;
     const T = state.config.teams;
     const list = p => `<details ${T[p].length ? "" : "open"}><summary>${PANEL_NAME[p]}: ${T[p].length} teams</summary>
-      ${T[p].length ? `<ol class="tlist">${T[p].map(t => `<li>${esc(t.name)} <span class="dim">${esc(t.school)}${t.level ? ", " + esc(t.level) : ""}, ${t.members.length} members</span></li>`).join("")}</ol>` : `<p class="dim" style="margin:4px 0 0">None yet.</p>`}</details>`;
+      ${T[p].length ? `<ol class="tlist">${T[p].map(t => `<li>${esc(t.name)} <span class="dim">${esc(t.school)}${t.level ? ", " + esc(t.level) : ""}, ${t.members.length} members</span><br><span class="dim" style="font-size:.85rem">${t.ps ? "PS: " + esc(t.ps) : "No problem statement found"}</span></li>`).join("")}</ol>` : `<p class="dim" style="margin:4px 0 0">None yet.</p>`}</details>`;
     box.innerHTML = `
       <h3>Teams</h3>
       <p class="dim" style="margin:0;font-size:.9rem">Teams come from the <b>Teams</b> tab of your Google Sheet: one row per person, in the columns Name, School, Level, Role, Team, No of pax. The first 22 teams go to Panel A and the rest to Panel B, unless you type A or B in the optional Panel column. Don't rename a team after judging starts, or its scores won't match.</p>
+      <p class="dim" style="margin:8px 0 0;font-size:.9rem">Problem statements come from the <b>Problem statements</b> tab: team in column A, problem statement in column B.</p>
       ${list("A")}${list("B")}
       <div class="row">
         ${state.sheetUrl ? `<a class="ghost" href="${esc(state.sheetUrl)}" target="_blank" rel="noopener">Open Google Sheet</a>` : ""}
