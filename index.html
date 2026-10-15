@@ -484,7 +484,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
       <div class="progress"><i id="progressBar" style="width:0"></i></div>
       <div class="teams">
         ${teams.map((t, ti) => `
-          <article class="team" data-ti="${ti}" data-search="${esc([t.name, t.school, t.level, t.ps || "", ...t.members.map(m => m.name)].join(" ").toLowerCase())}">
+          <article class="team" data-ti="${ti}" data-num="${esc(teamNum(t))}">
             <div class="team-top">
               <div>
                 <div class="tname">${esc(t.name)}</div>
@@ -507,10 +507,15 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
                 <div class="hint" data-hint="${ti}-${ci}"></div>
               </div>`).join("")}
           </article>`).join("")}
-      </div>`;
+      </div>
+      <div class="empty hidden" id="findEmpty"></div>`;
     el.querySelector(".teams").addEventListener("click", onPick);
     wireWelcome();
-    $("#find").addEventListener("input", e => { state.find = e.target.value; applyFind(); });
+    $("#find").addEventListener("input", e => {
+      const digits = e.target.value.replace(/\D+/g, "");      // numbers only
+      if (digits !== e.target.value) e.target.value = digits;
+      state.find = digits; applyFind();
+    });
     applyFind();
     refreshScoring();
   }
@@ -523,7 +528,7 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
           <h2>${name ? esc(name) : `${PANEL_NAME[s.panel]}, Judge ${s.judge}`}</h2>
           <div class="who">${state.round === 2 ? `<span class="rchip">Round 2 finals</span> ` : ""}${name ? `${PANEL_NAME[s.panel]}, Judge ${s.judge}` : ""}</div>
         </div>
-        ${withFind ? `<input id="find" type="search" placeholder="Search teams, schools, students or PS" aria-label="Find a team" value="${esc(state.find)}">` : ""}
+        ${withFind ? `<input id="find" type="search" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Search team number, e.g. 14" aria-label="Search team number" value="${esc(state.find)}">` : ""}
       </div>`;
   }
   function welcomeCard(nTeams){
@@ -549,9 +554,20 @@ details summary{cursor:pointer;font-weight:600;margin-top:10px}
       $("#welcome")?.remove();
     });
   }
+  // "Team 14" -> "14"; a team with no number in its name can't be found by number
+  const teamNum = t => (String(t.name).match(/\d+/) || [""])[0].replace(/^0+(?=\d)/, "");
   function applyFind(){
-    const q = state.find.trim().toLowerCase();
-    document.querySelectorAll("#view-score .team").forEach(c => c.classList.toggle("hidden", !!q && !c.dataset.search.includes(q)));
+    const q = String(state.find || "").replace(/\D+/g, "").replace(/^0+(?=\d)/, "");
+    let shown = 0;
+    document.querySelectorAll("#view-score .team").forEach(c => {
+      const hit = !q || c.dataset.num === q;
+      c.classList.toggle("hidden", !hit); if (hit) shown++;
+    });
+    const empty = $("#findEmpty");
+    if (empty){
+      empty.classList.toggle("hidden", !q || shown > 0);
+      empty.innerHTML = q && !shown ? `<h3>No Team ${esc(q)} here</h3><p class="dim">Team ${esc(q)} isn't on your list. Clear the search to see all your teams.</p>` : "";
+    }
   }
   function onPick(e){
     const b = e.target.closest(".lvl-btn"); if (!b) return;
